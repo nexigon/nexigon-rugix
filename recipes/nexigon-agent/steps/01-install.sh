@@ -41,4 +41,4 @@ EOF
 install -D -m 644 "${RECIPE_DIR}/files/nexigon-agent.service" -t /etc/systemd/system
 systemctl enable nexigon-agent
 
-install -D -m 755 "${RECIPE_DIR}/files/nexigon-device-identity" -t /usr/libexec/nexigon
+install -D -m 755 "${RECIPE_DIR}/files/nexigon-device-fingerprint" -t /usr/libexec/nexigon
