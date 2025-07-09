@@ -3,7 +3,7 @@
 set -euo pipefail
 
 mkdir -p /etc/nexigon
-install -D -m 644 "${RECIPE_DIR}/files/nexigon-agent.toml" -t /etc/nexigon
+cp "${RECIPE_DIR}/files/nexigon-agent.toml" /etc/nexigon/agent.toml
 
 # Inject configuration from local environment.
 echo ".env" >> "${LAYER_REBUILD_IF_CHANGED}"
