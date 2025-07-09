@@ -2,3 +2,5 @@
 
 hub-url = "%%HUB_URL%%"
 token = "%%TOKEN%%"
+
+fingerprint-script = "/usr/libexec/nexigon/nexigon-device-fingerprint"
