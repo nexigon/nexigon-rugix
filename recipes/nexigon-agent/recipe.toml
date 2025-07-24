@@ -1,6 +1,6 @@
 description = "install Nexigon Agent"
 dependencies = []
-priority = 100
+priority = 200
 
 [parameters]
 version = { default = "latest" }

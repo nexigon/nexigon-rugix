@@ -1,6 +1,6 @@
 description = "install Nexigon Agent configuration for Raspberry Pi"
 dependencies = ["nexigon-agent"]
-priority = 200
+priority = 100
 
 [parameters]
 version = { default = "latest" }
