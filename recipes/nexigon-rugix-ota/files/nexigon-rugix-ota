@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "[ERROR] script must be run as root" >&2
+    exit 1
+fi
+
+LOCKFILE="/var/lock/nexigon-rugix-ota.lock"
+
+exec 200>"$LOCKFILE"
+
+if ! flock -n 200; then
+    echo "[ERROR] another instance of this script is already running" >&2
+    exit 1
+fi
+
+RUGIX_BUILD_INFO=$(cat /etc/rugix/system-build-info.json)
+
+SYSTEM_NAME=$(echo "$RUGIX_BUILD_INFO" | jq -r '.name')
+
+CURRENT_VERSION=$(echo "$RUGIX_BUILD_INFO" | jq -r '.release.version')
+
+OTA_CONFIG=$(nexigon-agent device properties get "org.rugix.ota.config")
+
+if [ "$(echo "$OTA_CONFIG" | jq -r '.result')" == "NotFound" ]; then
+    echo "[INFO] no device-specific OTA configuration found, using defaults" >&2
+    # shellcheck disable=SC1091
+    source /etc/nexigon-rugix-ota.conf
+    OTA_CONFIG=$(jq -n --arg path "$VERSION_PATH" '{ "path": $path }')
+else
+    echo "[INFO] device-specific OTA configuration found" >&2
+    OTA_CONFIG=$(echo "$OTA_CONFIG" | jq -r '.value')
+fi
+
+echo "[INFO] OTA configuration: $OTA_CONFIG" >&2
+echo "[INFO] current version: $CURRENT_VERSION" >&2
+
+OTA_STATUS=$(nexigon-agent device properties get "dev.nexigon.ota.status")
+
+if [ "$(echo "$OTA_STATUS" | jq -r '.result')" == "NotFound" ]; then
+    echo "[INFO] no OTA status found, initializing" >&2
+    OTA_STATUS=$(jq -n --arg version "$CURRENT_VERSION" '{ "currentVersion": $version, "active": false }')
+else
+    OTA_STATUS=$(echo "$OTA_STATUS" | jq -r '.value')
+    OTA_STATUS=$(echo "$OTA_STATUS" | jq --arg version "$CURRENT_VERSION" '.currentVersion = $version')
+fi
+
+echo "[INFO] OTA status: $OTA_STATUS" >&2
+
+RUGIX_SYSTEM_INFO=$(rugix-ctrl system info)
+
+ACTIVE_GROUP=$(echo "$RUGIX_SYSTEM_INFO" | jq -r '.boot.activeGroup')
+DEFAULT_GROUP=$(echo "$RUGIX_SYSTEM_INFO" | jq -r '.boot.defaultGroup')
+
+if [ "$ACTIVE_GROUP" != "$DEFAULT_GROUP" ]; then
+    echo "[INFO] committing system" >&2
+    nexigon-agent events emit --category "org.rugix.ota" \
+        --attribute "activeGroup=$(jq -n --arg group "$ACTIVE_GROUP" '$group')" \
+        --attribute "defaultGroup=$(jq -n --arg group "$DEFAULT_GROUP" '$group')" \
+        '"committing system"'
+    OTA_STATUS=$(echo "$OTA_STATUS" | jq '.state = "committing"')
+    nexigon-agent device properties set "dev.nexigon.ota.status" "$OTA_STATUS"
+    rugix-ctrl system commit
+    OTA_STATUS=$(echo "$OTA_STATUS" | jq '.state = "completed" | .active = false')
+    nexigon-agent events emit --category "org.rugix.ota" \
+        '"update completed"'
+    nexigon-agent device properties set "dev.nexigon.ota.status" "$OTA_STATUS"
+fi
+
+OTA_ACTIVE=$(echo "$OTA_STATUS" | jq -r '.active')
+
+if [ "$OTA_ACTIVE" = true ]; then
+    TARGET_VERSION=$(echo "$OTA_CONFIG" | jq -r '.targetVersion')
+    if [ "$TARGET_VERSION" == "$CURRENT_VERSION" ]; then
+        # Update has been committed outside this script already.
+        echo "[INFO] update completed" >&2
+        OTA_STATUS=$(echo "$OTA_STATUS" | jq '.state = "completed" | .active = false')
+        nexigon-agent events emit --category "org.rugix.ota" \
+            '"update completed"'
+        nexigon-agent device properties set "dev.nexigon.ota.status" "$OTA_STATUS"
+    else
+        echo "[INFO] update failed" >&2
+        OTA_STATUS=$(echo "$OTA_STATUS" | jq '.state = "failed" | .active = false')
+        nexigon-agent events emit --category "org.rugix.ota" \
+            --attribute "targetVersion=$(jq -n --arg version "$TARGET_VERSION" '$version')" \
+            --attribute "currentVersion=$(jq -n --arg version "$CURRENT_VERSION" '$version')" \
+            --severity "error" \
+            '"update failed"'
+        nexigon-agent device properties set "dev.nexigon.ota.status" "$OTA_STATUS"
+    fi
+fi
+
+VERSION_PATH=$(echo "$OTA_CONFIG" | jq -r '.path')
+
+nexigon-agent events emit --category "org.rugix.ota" \
+    --attribute "path=$(jq -n --arg path "$VERSION_PATH" '$path')" \
+    --attribute "system=$(jq -n --arg system "$SYSTEM_NAME" '$system')" \
+    --attribute "currentVersion=$(jq -n --arg version "$CURRENT_VERSION" '$version')" \
+    '"checking for updates"'
+
+TARGET_BUILD_INFO_URL=$(nexigon-agent repositories issue-url "$VERSION_PATH/$SYSTEM_NAME.build-info.json" | jq -r '.url')
+TARGET_BUILD_INFO=$(curl -sSfL "$TARGET_BUILD_INFO_URL")
+
+TARGET_VERSION=$(echo "$TARGET_BUILD_INFO" | jq -r '.release.version')
+
+if [ "$TARGET_VERSION" == "$CURRENT_VERSION" ]; then
+    echo "[INFO] no updates available" >&2
+    nexigon-agent events emit --category "org.rugix.ota" \
+        --attribute "currentVersion=$(jq -n --arg version "$CURRENT_VERSION" '$version')" \
+        --attribute "targetVersion=$(jq -n --arg version "$TARGET_VERSION" '$version')" \
+        '"no update available"'
+    exit 0
+fi
+
+nexigon-agent events emit --category "org.rugix.ota" \
+    --attribute "currentVersion=$(jq -n --arg version "$CURRENT_VERSION" '$version')" \
+    --attribute "targetVersion=$(jq -n --arg version "$TARGET_VERSION" '$version')" \
+    '"update available, installing"'
+
+if [ "$ACTIVE_GROUP" == "a" ]; then
+    TARGET_GROUP="b"
+else
+    TARGET_GROUP="a"
+fi
+
+echo "[INFO] installing update to group $TARGET_GROUP" >&2
+
+nexigon-agent events emit --category "org.rugix.ota" \
+    --attribute "activeGroup=$(jq -n --arg group "$ACTIVE_GROUP" '$group')" \
+    --attribute "targetGroup=$(jq -n --arg group "$TARGET_GROUP" '$group')" \
+    '"installing update"'
+
+BUNDLE_URL=$(nexigon-agent repositories issue-url "$VERSION_PATH/$SYSTEM_NAME.rugixb" | jq -r '.url')
+
+echo "[INFO] installing bundle from $BUNDLE_URL" >&2
+
+OTA_STATUS=$(echo "$OTA_STATUS" | jq --arg version "$TARGET_VERSION" '.state = "installing" | .active = true | .targetVersion = $version')
+
+nexigon-agent device properties set "dev.nexigon.ota.status" "$OTA_STATUS"
+
+rugix-ctrl update install --reboot no "$BUNDLE_URL"
+
+nexigon-agent events emit --category "org.rugix.ota" '"update installed, rebooting"'
+
+OTA_STATUS=$(echo "$OTA_STATUS" | jq '.state = "rebooting"')
+
+nexigon-agent device properties set "dev.nexigon.ota.status" "$OTA_STATUS"
+
+echo "[INFO] rebooting" >&2
+
+rugix-ctrl system reboot --spare
