@@ -42,6 +42,7 @@ OTA_STATUS=$(nexigon-agent device properties get "dev.nexigon.ota.status")
 if [ "$(echo "$OTA_STATUS" | jq -r '.result')" == "NotFound" ]; then
     echo "[INFO] no OTA status found, initializing" >&2
     OTA_STATUS=$(jq -n --arg version "$CURRENT_VERSION" '{ "currentVersion": $version, "active": false }')
+    nexigon-agent device properties set "dev.nexigon.ota.status" "$OTA_STATUS"
 else
     OTA_STATUS=$(echo "$OTA_STATUS" | jq -r '.value')
     OTA_STATUS=$(echo "$OTA_STATUS" | jq --arg version "$CURRENT_VERSION" '.currentVersion = $version')
