@@ -1,2 +1,5 @@
 description = "configure Nexigon Agent"
 dependencies = []
+
+[parameters]
+extra_config = { default = "" }
