@@ -22,7 +22,7 @@ SYSTEM_NAME=$(echo "$RUGIX_BUILD_INFO" | jq -r '.name')
 
 CURRENT_VERSION=$(echo "$RUGIX_BUILD_INFO" | jq -r '.release.version')
 
-OTA_CONFIG=$(nexigon-agent device properties get "org.rugix.ota.config")
+OTA_CONFIG=$(nexigon-agent device properties get "dev.nexigon.ota.config")
 
 if [ "$(echo "$OTA_CONFIG" | jq -r '.result')" == "NotFound" ]; then
     echo "[INFO] no device-specific OTA configuration found, using defaults" >&2
