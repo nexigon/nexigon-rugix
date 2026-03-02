@@ -126,9 +126,13 @@ else
     TARGET_GROUP="a"
 fi
 
+BUNDLE_HASH_URL=$(nexigon-agent repositories issue-url "$VERSION_PATH/$SYSTEM_NAME.rugixb-hash" | jq -r '.url')
+BUNDLE_HASH=$(curl -sSfL "$BUNDLE_HASH_URL")
+
 echo "[INFO] installing update to group $TARGET_GROUP" >&2
 
 nexigon-agent events emit --category "org.rugix.ota" \
+    --attribute "bundleHash=\"$BUNDLE_HASH\"" \
     --attribute "activeGroup=$(jq -n --arg group "$ACTIVE_GROUP" '$group')" \
     --attribute "targetGroup=$(jq -n --arg group "$TARGET_GROUP" '$group')" \
     '"installing update"'
@@ -141,7 +145,7 @@ OTA_STATUS=$(echo "$OTA_STATUS" | jq --arg version "$TARGET_VERSION" '.state = "
 
 nexigon-agent device properties set "dev.nexigon.ota.status" "$OTA_STATUS"
 
-rugix-ctrl update install --reboot no "$BUNDLE_URL"
+rugix-ctrl update install --bundle-hash $BUNDLE_HASH --reboot no "$BUNDLE_URL"
 
 nexigon-agent events emit --category "org.rugix.ota" '"update installed, rebooting"'
 
