@@ -4,7 +4,7 @@ To make the recipes and layers available, include the following in your `rugix-b
 
 ```toml
 [repositories]
-nexigon = { git = "https://github.com/nexigon/nexigon-rugix.git", branch = "v0" }
+nexigon = { git = "https://github.com/nexigon/nexigon-rugix.git", branch = "v0.1" }
 ```
 
 We follow [Cargo's flavor of semantic versioning](https://doc.rust-lang.org/cargo/reference/resolver.html#semver-compatibility).
