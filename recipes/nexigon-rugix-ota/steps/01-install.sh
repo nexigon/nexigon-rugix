@@ -21,8 +21,12 @@ if [ -z "${NEXIGON_PACKAGE:-}" ]; then
     exit 1
 fi
 
-cat <<EOF >/etc/nexigon-rugix-ota.conf
-VERSION_PATH="${NEXIGON_REPOSITORY}/${NEXIGON_PACKAGE}/stable"
+cat <<EOF >/etc/nexigon-rugix-ota.json
+{"path": "${NEXIGON_REPOSITORY}/${NEXIGON_PACKAGE}/${RECIPE_PARAM_TAG}", "rugix": {"useBundleHash": ${RECIPE_PARAM_USE_BUNDLE_HASH}}}
 EOF
+
+if [ -d "${RECIPE_DIR}/cmds" ]; then
+    install -D -m 644 "${RECIPE_DIR}"/cmds/*.toml -t /etc/nexigon/agent/commands
+fi
 
 systemctl enable nexigon-rugix-ota.timer

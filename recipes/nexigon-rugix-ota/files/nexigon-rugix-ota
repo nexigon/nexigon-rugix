@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+#
+# Rugix OTA update reconciliation loop.
 
 set -euo pipefail
 
@@ -8,117 +10,157 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 LOCKFILE="/var/lock/nexigon-rugix-ota.lock"
-
 exec 200>"$LOCKFILE"
-
 if ! flock -n 200; then
     echo "[ERROR] another instance of this script is already running" >&2
     exit 1
 fi
 
-RUGIX_BUILD_INFO=$(cat /etc/rugix/system-build-info.json)
+OTA_STATUS='{}'
 
-SYSTEM_NAME=$(echo "$RUGIX_BUILD_INFO" | jq -r '.name')
+emit_event() {
+    local message="$1"
+    shift
+    local args=()
+    while [ $# -ge 2 ]; do
+        args+=(--attribute "$1=$(jq -n --arg v "$2" '$v')")
+        shift 2
+    done
+    nexigon-agent events emit --category "ota" "${args[@]}" "\"$message\"" || true
+}
 
-CURRENT_VERSION=$(echo "$RUGIX_BUILD_INFO" | jq -r '.release.version')
+set_status() {
+    local expr="$1"
+    shift
+    OTA_STATUS=$(echo "$OTA_STATUS" | jq "$@" "$expr")
+    nexigon-agent device properties set "dev.nexigon.ota.status" "$OTA_STATUS" || true
+}
 
-OTA_CONFIG=$(nexigon-agent device properties get "dev.nexigon.ota.config")
+record_failure() {
+    local message="$1"
+    shift
+    echo "[ERROR] $message" >&2
+    emit_event "update failed" "error" "$message" "$@"
+    set_status '.state = "failed" | .failureCount = ((.failureCount // 0) + 1) | .lastError = $msg' \
+        --arg msg "$message"
+}
 
-if [ "$(echo "$OTA_CONFIG" | jq -r '.result')" == "NotFound" ]; then
-    echo "[INFO] no device-specific OTA configuration found, using defaults" >&2
-    # shellcheck disable=SC1091
-    source /etc/nexigon-rugix-ota.conf
-    OTA_CONFIG=$(jq -n --arg path "$VERSION_PATH" '{ "path": $path }')
+if [ -f /etc/rugix/system-build-info.json ]; then
+    BUILD_INFO=$(cat /etc/rugix/system-build-info.json)
+    SYSTEM_NAME=$(echo "$BUILD_INFO" | jq -r '.name')
+    CURRENT_VERSION=$(echo "$BUILD_INFO" | jq -r '.release.version')
+elif [ -f /etc/os-release ]; then
+    source /etc/os-release
+    SYSTEM_NAME="${IMAGE_ID:?IMAGE_ID not set in /etc/os-release}"
+    CURRENT_VERSION="${IMAGE_VERSION:?IMAGE_VERSION not set in /etc/os-release}"
 else
-    echo "[INFO] device-specific OTA configuration found" >&2
-    OTA_CONFIG=$(echo "$OTA_CONFIG" | jq -r '.value')
+    echo "[ERROR] cannot determine system name and version" >&2
+    exit 1
 fi
 
-echo "[INFO] OTA configuration: $OTA_CONFIG" >&2
-echo "[INFO] current version: $CURRENT_VERSION" >&2
+echo "[INFO] system: $SYSTEM_NAME, version: $CURRENT_VERSION" >&2
 
-OTA_STATUS=$(nexigon-agent device properties get "dev.nexigon.ota.status")
+OTA_CONFIG=$(cat /etc/nexigon-rugix-ota.json)
 
-if [ "$(echo "$OTA_STATUS" | jq -r '.result')" == "NotFound" ]; then
-    echo "[INFO] no OTA status found, initializing" >&2
-    OTA_STATUS=$(jq -n --arg version "$CURRENT_VERSION" '{ "currentVersion": $version, "active": false }')
-    nexigon-agent device properties set "dev.nexigon.ota.status" "$OTA_STATUS"
-else
-    OTA_STATUS=$(echo "$OTA_STATUS" | jq -r '.value')
-    OTA_STATUS=$(echo "$OTA_STATUS" | jq --arg version "$CURRENT_VERSION" '.currentVersion = $version')
+# Read security settings from the local config before cloud merge.
+USE_BUNDLE_HASH=$(echo "$OTA_CONFIG" | jq -r '.rugix.useBundleHash // false')
+
+OTA_CONFIG_PROPERTY=$(nexigon-agent device properties get "dev.nexigon.ota.config")
+
+if [ "$(echo "$OTA_CONFIG_PROPERTY" | jq -r '.result')" == "Found" ]; then
+    echo "[INFO] merging device-specific OTA configuration" >&2
+    OTA_CONFIG=$(echo "$OTA_CONFIG" "$(echo "$OTA_CONFIG_PROPERTY" | jq -r '.value')" | jq -s '.[0] * .[1]')
 fi
 
-echo "[INFO] OTA status: $OTA_STATUS" >&2
+OTA_STATUS_PROPERTY=$(nexigon-agent device properties get "dev.nexigon.ota.status")
+
+if [ "$(echo "$OTA_STATUS_PROPERTY" | jq -r '.result')" == "Found" ]; then
+    OTA_STATUS=$(echo "$OTA_STATUS_PROPERTY" | jq -r '.value')
+else
+    OTA_STATUS='{}'
+fi
+
+set_status '.currentVersion = $version | .config = $config' \
+    --arg version "$CURRENT_VERSION" \
+    --argjson config "$OTA_CONFIG"
 
 RUGIX_SYSTEM_INFO=$(rugix-ctrl system info)
-
 ACTIVE_GROUP=$(echo "$RUGIX_SYSTEM_INFO" | jq -r '.boot.activeGroup')
 DEFAULT_GROUP=$(echo "$RUGIX_SYSTEM_INFO" | jq -r '.boot.defaultGroup')
 
+PREV_STATE=$(echo "$OTA_STATUS" | jq -r '.state // "idle"')
+TARGET_VERSION=$(echo "$OTA_STATUS" | jq -r '.targetVersion // empty')
+
 if [ "$ACTIVE_GROUP" != "$DEFAULT_GROUP" ]; then
-    echo "[INFO] committing system" >&2
-    nexigon-agent events emit --category "org.rugix.ota" \
-        --attribute "activeGroup=$(jq -n --arg group "$ACTIVE_GROUP" '$group')" \
-        --attribute "defaultGroup=$(jq -n --arg group "$DEFAULT_GROUP" '$group')" \
-        '"committing system"'
-    OTA_STATUS=$(echo "$OTA_STATUS" | jq '.state = "committing"')
-    nexigon-agent device properties set "dev.nexigon.ota.status" "$OTA_STATUS"
-    rugix-ctrl system commit
-    OTA_STATUS=$(echo "$OTA_STATUS" | jq '.state = "completed" | .active = false')
-    nexigon-agent events emit --category "org.rugix.ota" \
-        '"update completed"'
-    nexigon-agent device properties set "dev.nexigon.ota.status" "$OTA_STATUS"
-fi
+    echo "[INFO] committing system (active=$ACTIVE_GROUP, default=$DEFAULT_GROUP)" >&2
+    emit_event "committing system" \
+        "activeGroup" "$ACTIVE_GROUP" \
+        "defaultGroup" "$DEFAULT_GROUP"
+    set_status '.state = "committing"'
 
-OTA_ACTIVE=$(echo "$OTA_STATUS" | jq -r '.active')
-
-if [ "$OTA_ACTIVE" = true ]; then
-    TARGET_VERSION=$(echo "$OTA_CONFIG" | jq -r '.targetVersion')
-    if [ "$TARGET_VERSION" == "$CURRENT_VERSION" ]; then
-        # Update has been committed outside this script already.
-        echo "[INFO] update completed" >&2
-        OTA_STATUS=$(echo "$OTA_STATUS" | jq '.state = "completed" | .active = false')
-        nexigon-agent events emit --category "org.rugix.ota" \
-            '"update completed"'
-        nexigon-agent device properties set "dev.nexigon.ota.status" "$OTA_STATUS"
+    if rugix-ctrl system commit; then
+        emit_event "update completed"
+        set_status '.state = "completed" | .failureCount = 0 | .lastError = null'
+    fi
+    exit 0
+elif [ "$PREV_STATE" == "installing" ] || [ "$PREV_STATE" == "rebooting" ] || [ "$PREV_STATE" == "committing" ]; then
+    if [ -n "$TARGET_VERSION" ] && [ "$TARGET_VERSION" != "$CURRENT_VERSION" ]; then
+        record_failure "update rolled back (expected $TARGET_VERSION, running $CURRENT_VERSION)" \
+            "targetVersion" "$TARGET_VERSION" \
+            "currentVersion" "$CURRENT_VERSION"
+        exit 0
     else
-        echo "[INFO] update failed" >&2
-        OTA_STATUS=$(echo "$OTA_STATUS" | jq '.state = "failed" | .active = false')
-        nexigon-agent events emit --category "org.rugix.ota" \
-            --attribute "targetVersion=$(jq -n --arg version "$TARGET_VERSION" '$version')" \
-            --attribute "currentVersion=$(jq -n --arg version "$CURRENT_VERSION" '$version')" \
-            --severity "error" \
-            '"update failed"'
-        nexigon-agent device properties set "dev.nexigon.ota.status" "$OTA_STATUS"
+        echo "[INFO] update completed (committed externally)" >&2
+        emit_event "update completed"
+        set_status '.state = "completed" | .failureCount = 0 | .lastError = null'
+        exit 0
     fi
 fi
 
 VERSION_PATH=$(echo "$OTA_CONFIG" | jq -r '.path')
 
-nexigon-agent events emit --category "org.rugix.ota" \
-    --attribute "path=$(jq -n --arg path "$VERSION_PATH" '$path')" \
-    --attribute "system=$(jq -n --arg system "$SYSTEM_NAME" '$system')" \
-    --attribute "currentVersion=$(jq -n --arg version "$CURRENT_VERSION" '$version')" \
-    '"checking for updates"'
+emit_event "checking for updates" \
+    "path" "$VERSION_PATH" \
+    "system" "$SYSTEM_NAME" \
+    "currentVersion" "$CURRENT_VERSION"
 
-TARGET_BUILD_INFO_URL=$(nexigon-agent repositories issue-url "$VERSION_PATH/$SYSTEM_NAME.build-info.json" | jq -r '.url')
-TARGET_BUILD_INFO=$(curl -sSfL "$TARGET_BUILD_INFO_URL")
+if ! VERSION_INFO=$(nexigon-agent repositories versions info "$VERSION_PATH"); then
+    record_failure "unable to resolve version at $VERSION_PATH"
+    exit 1
+fi
 
-TARGET_VERSION=$(echo "$TARGET_BUILD_INFO" | jq -r '.release.version')
+TARGET_VERSION=$(echo "$VERSION_INFO" | jq -r '.metadata.imageVersion // empty')
 
 if [ "$TARGET_VERSION" == "$CURRENT_VERSION" ]; then
     echo "[INFO] no updates available" >&2
-    nexigon-agent events emit --category "org.rugix.ota" \
-        --attribute "currentVersion=$(jq -n --arg version "$CURRENT_VERSION" '$version')" \
-        --attribute "targetVersion=$(jq -n --arg version "$TARGET_VERSION" '$version')" \
-        '"no update available"'
+    emit_event "no update available" \
+        "currentVersion" "$CURRENT_VERSION"
+    set_status '.state = "completed" | .failureCount = 0 | .lastError = null'
     exit 0
 fi
 
-nexigon-agent events emit --category "org.rugix.ota" \
-    --attribute "currentVersion=$(jq -n --arg version "$CURRENT_VERSION" '$version')" \
-    --attribute "targetVersion=$(jq -n --arg version "$TARGET_VERSION" '$version')" \
-    '"update available, installing"'
+BUNDLE_ASSET=$(echo "$VERSION_INFO" | jq -r \
+    --arg f "$SYSTEM_NAME.rugixb" \
+    '.assets[] | select(.filename == $f)')
+
+if [ -z "$BUNDLE_ASSET" ]; then
+    record_failure "bundle asset $SYSTEM_NAME.rugixb not found in version"
+    exit 1
+fi
+
+INSTALL_ARGS=()
+if [ "$USE_BUNDLE_HASH" == "true" ]; then
+    BUNDLE_HASH=$(echo "$BUNDLE_ASSET" | jq -r '.metadata.rugix.bundleHash // empty')
+    if [ -z "$BUNDLE_HASH" ]; then
+        record_failure "no bundleHash in asset metadata for $SYSTEM_NAME.rugixb"
+        exit 1
+    fi
+    INSTALL_ARGS+=(--bundle-hash "$BUNDLE_HASH")
+fi
+
+emit_event "update available, installing" \
+    "currentVersion" "$CURRENT_VERSION" \
+    "targetVersion" "$TARGET_VERSION"
 
 if [ "$ACTIVE_GROUP" == "a" ]; then
     TARGET_GROUP="b"
@@ -126,33 +168,27 @@ else
     TARGET_GROUP="a"
 fi
 
-BUNDLE_HASH_URL=$(nexigon-agent repositories issue-url "$VERSION_PATH/$SYSTEM_NAME.rugixb-hash" | jq -r '.url')
-BUNDLE_HASH=$(curl -sSfL "$BUNDLE_HASH_URL")
-
 echo "[INFO] installing update to group $TARGET_GROUP" >&2
 
-nexigon-agent events emit --category "org.rugix.ota" \
-    --attribute "bundleHash=\"$BUNDLE_HASH\"" \
-    --attribute "activeGroup=$(jq -n --arg group "$ACTIVE_GROUP" '$group')" \
-    --attribute "targetGroup=$(jq -n --arg group "$TARGET_GROUP" '$group')" \
-    '"installing update"'
+emit_event "installing update" \
+    "activeGroup" "$ACTIVE_GROUP" \
+    "targetGroup" "$TARGET_GROUP"
 
-BUNDLE_URL=$(nexigon-agent repositories issue-url "$VERSION_PATH/$SYSTEM_NAME.rugixb" | jq -r '.url')
+BUNDLE_URL=$(nexigon-agent repositories issue-url \
+    "$VERSION_PATH/$SYSTEM_NAME.rugixb" | jq -r '.url')
 
 echo "[INFO] installing bundle from $BUNDLE_URL" >&2
 
-OTA_STATUS=$(echo "$OTA_STATUS" | jq --arg version "$TARGET_VERSION" '.state = "installing" | .active = true | .targetVersion = $version')
+set_status '.state = "installing" | .targetVersion = $version' \
+    --arg version "$TARGET_VERSION"
 
-nexigon-agent device properties set "dev.nexigon.ota.status" "$OTA_STATUS"
+if ! rugix-ctrl update install "${INSTALL_ARGS[@]}" --reboot no "$BUNDLE_URL"; then
+    record_failure "rugix-ctrl update install failed"
+    exit 1
+fi
 
-rugix-ctrl update install --bundle-hash $BUNDLE_HASH --reboot no "$BUNDLE_URL"
-
-nexigon-agent events emit --category "org.rugix.ota" '"update installed, rebooting"'
-
-OTA_STATUS=$(echo "$OTA_STATUS" | jq '.state = "rebooting"')
-
-nexigon-agent device properties set "dev.nexigon.ota.status" "$OTA_STATUS"
+emit_event "update installed, rebooting"
+set_status '.state = "rebooting"'
 
 echo "[INFO] rebooting" >&2
-
 rugix-ctrl system reboot --spare

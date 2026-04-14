@@ -1,10 +1,10 @@
 [Unit]
-Description=Periodically Check for OTA Updates
+Description=Nexigon Rugix OTA Update Timer
 
 [Timer]
-OnBootSec=1min
-OnUnitInactiveSec=@@INTERVAL@@
-RandomizedDelaySec=60
+OnBootSec=60
+OnUnitActiveSec=@@INTERVAL@@
+RandomizedDelaySec=300
 Persistent=true
 
 [Install]

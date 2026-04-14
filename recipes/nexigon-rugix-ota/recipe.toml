@@ -1,4 +1,7 @@
-description = "Nexigon-Rugix OTA update service"
+description = "Nexigon Rugix OTA update service"
+dependencies = ["nexigon-rugix-watchdog"]
 
 [parameters]
-interval = { default = "1h" }
+interval = { default = "4h" }
+tag = { default = "stable" }
+use_bundle_hash = { default = "false" }

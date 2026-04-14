@@ -1,0 +1,4 @@
+description = "Watchdog for auto-rollback of uncommitted system updates"
+
+[parameters]
+timeout = { default = "1800" }
