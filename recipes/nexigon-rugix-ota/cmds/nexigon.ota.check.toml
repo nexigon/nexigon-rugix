@@ -4,5 +4,5 @@ description = "Trigger an OTA update check"
 category = "system"
 
 [exec]
-handler = ["systemctl", "start", "nexigon-rugix-ota.service"]
+handler = ["systemctl", "start", "--no-block", "nexigon-rugix-ota.service"]
 timeout = 10
