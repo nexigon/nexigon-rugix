@@ -135,7 +135,7 @@ if [ "$TARGET_VERSION" == "$CURRENT_VERSION" ]; then
     echo "[INFO] no updates available" >&2
     emit_event "no update available" \
         "currentVersion" "$CURRENT_VERSION"
-    set_status '.state = "completed" | .failureCount = 0 | .lastError = null'
+    set_status '.state = "completed" | .targetVersion = null | .failureCount = 0 | .lastError = null'
     exit 0
 fi
 
