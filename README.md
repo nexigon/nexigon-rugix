@@ -11,6 +11,20 @@ We follow [Cargo's flavor of semantic versioning](https://doc.rust-lang.org/carg
 You can also use the most recent development version by omitting the `branch` property.
 Please be aware that this may break your builds if we introduce backwards-incompatible changes.
 
+## Provisioning Images
+
+The `nexigon-agent-config` recipe can build tokenless images for pairing-key
+provisioning:
+
+```toml
+[parameters."nexigon/nexigon-agent-config"]
+provisioning = "true"
+```
+
+In this mode, the recipe does not read `.env` and does not bake a deployment
+token into the image. The agent starts its local provisioning endpoint and
+stores redeemed credentials under `/var/lib/nexigon/agent`.
+
 ## Licensing
 
 This project is licensed under either [MIT](https://github.com/nexigon/nexigon-rugix/blob/main/LICENSE-MIT) or [Apache 2.0](https://github.com/nexigon/nexigon-rugix/blob/main/LICENSE-APACHE) at your opinion.

@@ -36,6 +36,9 @@ mkdir -p /etc/rugix/state
 cat >/etc/rugix/state/nexigon.toml <<EOF
 [[persist]]
 directory = "/etc/nexigon/agent/ssl"
+
+[[persist]]
+directory = "/var/lib/nexigon/agent"
 EOF
 
 install -D -m 644 "${RECIPE_DIR}/files/nexigon-agent.service" -t /etc/systemd/system
