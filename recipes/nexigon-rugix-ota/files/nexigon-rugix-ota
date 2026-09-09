@@ -65,7 +65,16 @@ OTA_CONFIG=$(cat /etc/nexigon-rugix-ota.json)
 # Read security settings from the local config before cloud merge.
 USE_BUNDLE_HASH=$(echo "$OTA_CONFIG" | jq -r '.rugix.useBundleHash // false')
 
-OTA_CONFIG_PROPERTY=$(nexigon-agent device properties get "dev.nexigon.ota.config")
+if ! OTA_CONFIG_PROPERTY=$(nexigon-agent device properties get "dev.nexigon.ota.config"); then
+    if [ ! -s /var/lib/nexigon/agent/credentials.json ] \
+        && ! grep -Eq '^[[:space:]]*token[[:space:]]*=' /etc/nexigon/agent.toml; then
+        echo "[INFO] Nexigon Agent is not paired; OTA remains idle" >&2
+        exit 0
+    fi
+
+    record_failure "unable to read OTA configuration from Nexigon"
+    exit 1
+fi
 
 if [ "$(echo "$OTA_CONFIG_PROPERTY" | jq -r '.result')" == "Found" ]; then
     echo "[INFO] merging device-specific OTA configuration" >&2
@@ -118,6 +127,11 @@ elif [ "$PREV_STATE" == "installing" ] || [ "$PREV_STATE" == "rebooting" ] || [ 
 fi
 
 VERSION_PATH=$(echo "$OTA_CONFIG" | jq -r '.path')
+if [ -z "$VERSION_PATH" ] || [ "$VERSION_PATH" = "null" ]; then
+    echo "[INFO] no OTA repository path configured" >&2
+    set_status '.state = "idle" | .targetVersion = null | .lastError = null'
+    exit 0
+fi
 
 emit_event "checking for updates" \
     "path" "$VERSION_PATH" \
@@ -151,11 +165,9 @@ fi
 INSTALL_ARGS=()
 if [ "$USE_BUNDLE_HASH" == "true" ]; then
     BUNDLE_HASH=$(echo "$BUNDLE_ASSET" | jq -r '.metadata.rugix.bundleHash // empty')
-    if [ -z "$BUNDLE_HASH" ]; then
-        record_failure "no bundleHash in asset metadata for $SYSTEM_NAME.rugixb"
-        exit 1
+    if [ -n "$BUNDLE_HASH" ]; then
+        INSTALL_ARGS+=(--bundle-hash "$BUNDLE_HASH")
     fi
-    INSTALL_ARGS+=(--bundle-hash "$BUNDLE_HASH")
 fi
 
 emit_event "update available, installing" \
