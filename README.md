@@ -11,6 +11,15 @@ We follow [Cargo's flavor of semantic versioning](https://doc.rust-lang.org/carg
 You can also use the most recent development version by omitting the `branch` property.
 Please be aware that this may break your builds if we introduce backwards-incompatible changes.
 
+## Agent Compatibility
+
+This recipe line defaults to Nexigon Agent `v0.5`. The version selector keeps
+builds on Agent 0.5 while accepting compatible patches, preserving the existing
+forwarding behavior when Agent 0.6 is released.
+
+An explicit `version = "latest"` override bypasses this default and can select
+a breaking release.
+
 ## Licensing
 
 This project is licensed under either [MIT](https://github.com/nexigon/nexigon-rugix/blob/main/LICENSE-MIT) or [Apache 2.0](https://github.com/nexigon/nexigon-rugix/blob/main/LICENSE-APACHE) at your opinion.

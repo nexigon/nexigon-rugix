@@ -3,5 +3,5 @@ dependencies = []
 priority = 200
 
 [parameters]
-version = { default = "latest" }
+version = { default = "v0.5" }
 use_musl = { default = "false" }
