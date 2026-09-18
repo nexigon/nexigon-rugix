@@ -11,6 +11,14 @@ We follow [Cargo's flavor of semantic versioning](https://doc.rust-lang.org/carg
 You can also use the most recent development version by omitting the `branch` property.
 Please be aware that this may break your builds if we introduce backwards-incompatible changes.
 
+## Agent Compatibility
+
+This recipe line defaults to Nexigon Agent `v0.6.0`. Agent 0.6 requires TCP
+forwarding destinations to be declared by an HTTP export or an explicit
+`[forwarding]` policy.
+
+Override the `version` parameter to select another Agent release.
+
 ## Provisioning Images
 
 The `nexigon-agent-config` recipe can build tokenless images for pairing-key
