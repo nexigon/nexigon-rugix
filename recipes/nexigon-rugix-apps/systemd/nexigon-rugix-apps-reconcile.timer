@@ -1,0 +1,9 @@
+[Unit]
+Description=Check Nexigon application configuration
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=1min
+
+[Install]
+WantedBy=timers.target

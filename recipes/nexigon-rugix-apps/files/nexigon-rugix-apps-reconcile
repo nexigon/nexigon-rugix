@@ -1,0 +1,264 @@
+#!/usr/bin/env python3
+"""Reconcile dev.nexigon.apps.config and report dev.nexigon.apps.status.
+
+The public configuration, status, and durable ledger contracts live in Nexigon's
+apps.sidex. A missing configuration suspends management. Empty apps removes
+previously managed apps. Failed work is bounded per configuration version.
+"""
+
+import argparse
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+
+
+def reconcile(state_dir, max_attempts, retry):
+    state_dir.mkdir(parents=True, exist_ok=True)
+    with (state_dir / "lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        response = command(
+            ["nexigon-agent", "device", "properties", "get", "dev.nexigon.apps.config"]
+        )
+        if response.get("result") == "NotFound":
+            return
+        if response.get("result") != "Found" or not response.get("protected"):
+            raise ValueError("apps configuration must be a protected property")
+        version = response["version"]
+        path = state_dir / "ledger.json"
+        ledger = (
+            json.loads(path.read_text())
+            if path.exists()
+            else {"configVersion": version, "managed": {}}
+        )
+        results = {}
+        try:
+            desired = validate_config(response["value"])
+            if ledger["configVersion"] != version or retry:
+                for entry in ledger["managed"].values():
+                    entry["attempts"] = 0
+                ledger["configVersion"] = version
+                persist(path, ledger)
+            for name, target in desired.items():
+                entry = ledger["managed"].get(name)
+                if entry is None:
+                    entry = {"desired": target, "attempts": 0}
+                    ledger["managed"][name] = entry
+                elif entry["desired"] != target:
+                    previous = entry["desired"]
+                    if any(
+                        previous.get(key) != target.get(key)
+                        for key in ("versionId", "assetFilename")
+                    ):
+                        entry.pop("generation", None)
+                    entry.update(desired=target, attempts=0)
+                results[name] = apply_app(
+                    name, target, entry, ledger, path, max_attempts
+                )
+            # Install failures do not remove the old fleet's remaining workloads.
+            if all(result["state"] == "converged" for result in results.values()):
+                for name in list(ledger["managed"]):
+                    if name in desired:
+                        continue
+                    entry = ledger["managed"][name]
+                    if entry["attempts"] >= max_attempts:
+                        results[name] = {
+                            "state": "blocked",
+                            "message": "Retry limit reached",
+                        }
+                        continue
+                    try:
+                        entry["attempts"] += 1
+                        persist(path, ledger)
+                        installed = command(["rugix-ctrl", "apps", "list"])
+                        if name in installed:
+                            command(["rugix-ctrl", "apps", "remove", name], parse=False)
+                        del ledger["managed"][name]
+                        persist(path, ledger)
+                    except (RuntimeError, ValueError) as error:
+                        results[name] = {"state": "failed", "message": str(error)}
+        except (ValueError, KeyError, TypeError) as error:
+            results["configuration"] = {"state": "failed", "message": str(error)}
+        states = {result["state"] for result in results.values()}
+        status = {
+            "configVersion": version,
+            "apps": results,
+            "state": "failed"
+            if "failed" in states
+            else "blocked"
+            if "blocked" in states
+            else "converged",
+        }
+        command(
+            [
+                "nexigon-agent",
+                "device",
+                "properties",
+                "set",
+                "dev.nexigon.apps.status",
+                json.dumps(status),
+            ],
+            parse=False,
+        )
+        if status["state"] != "converged":
+            raise RuntimeError("application configuration has not converged")
+
+
+def apply_app(name, target, entry, ledger, path, max_attempts):
+    try:
+        installed = command(["rugix-ctrl", "apps", "list"])
+        current = installed.get(name)
+        same_generation = (
+            current is not None
+            and entry.get("generation") is not None
+            and current.get("generation") == entry["generation"]
+        )
+        if same_generation and current["status"]["state"] == target["state"]:
+            entry["attempts"] = 0
+            persist(path, ledger)
+            return {"state": "converged"}
+        if entry["attempts"] >= max_attempts:
+            return {"state": "blocked", "message": "Retry limit reached"}
+        entry["attempts"] += 1
+        persist(path, ledger)
+        if not same_generation:
+            install(target)
+            current = command(["rugix-ctrl", "apps", "list"]).get(name)
+            if current is None or current.get("generation") is None:
+                raise RuntimeError("bundle did not activate the declared app")
+            entry["generation"] = current["generation"]
+            persist(path, ledger)
+        if current["status"]["state"] != target["state"]:
+            command(
+                [
+                    "rugix-ctrl",
+                    "apps",
+                    "start" if target["state"] == "running" else "stop",
+                    name,
+                ],
+                parse=False,
+            )
+        actual = command(["rugix-ctrl", "apps", "list"]).get(name)
+        if actual is None or actual["status"]["state"] != target["state"]:
+            raise RuntimeError("app did not reach its requested state")
+        entry["attempts"] = 0
+        persist(path, ledger)
+        return {"state": "converged"}
+    except (RuntimeError, ValueError, KeyError, TypeError) as error:
+        return {"state": "failed", "message": str(error)}
+
+
+def install(target):
+    version = command(
+        ["nexigon-agent", "repositories", "versions", "info", target["versionId"]]
+    )
+    assets = [
+        asset
+        for asset in version["assets"]
+        if asset["filename"] == target.get("assetFilename")
+        or ("assetFilename" not in target and asset["filename"].endswith(".rugixb"))
+    ]
+    if len(assets) != 1:
+        raise ValueError("select exactly one Rugix bundle asset")
+    asset = assets[0]
+    url = command(["nexigon-agent", "repositories", "issue-url", asset["assetId"]])[
+        "url"
+    ]
+    args = ["rugix-ctrl", "apps", "install"]
+    bundle_hash = (asset.get("metadata") or {}).get("rugix", {}).get("bundleHash")
+    if (
+        os.environ.get("NEXIGON_RUGIX_APPS_USE_BUNDLE_HASH", "false") == "true"
+        and bundle_hash
+    ):
+        args += ["--bundle-hash", bundle_hash]
+    # Rugix retains signature verification when no authenticated hash is supplied.
+    command(args + [url], parse=False)
+
+
+def validate_config(config):
+    if (
+        not isinstance(config, dict)
+        or set(config) != {"apps"}
+        or not isinstance(config["apps"], dict)
+    ):
+        raise ValueError("configuration must contain an apps object")
+    for name, target in config["apps"].items():
+        if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", name):
+            raise ValueError("invalid app name")
+        if not isinstance(target, dict) or set(target) - {
+            "versionId",
+            "assetFilename",
+            "state",
+        }:
+            raise ValueError("invalid app declaration")
+        if not isinstance(target.get("versionId"), str) or not target[
+            "versionId"
+        ].startswith("pkg_v_"):
+            raise ValueError(
+                "app versionId must identify an immutable repository version"
+            )
+        if target.get("state") not in ("running", "stopped"):
+            raise ValueError("app state must be running or stopped")
+        if "assetFilename" in target and not isinstance(target["assetFilename"], str):
+            raise ValueError("assetFilename must be a string")
+    return config["apps"]
+
+
+def command(args, parse=True):
+    try:
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=float(os.environ.get("NEXIGON_RUGIX_APPS_COMMAND_TIMEOUT", "600")),
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RuntimeError("failed to run " + args[0]) from error
+    if result.returncode:
+        # Download URLs can contain credentials; do not copy command output to status.
+        raise RuntimeError("command failed: " + " ".join(args[:3]))
+    return json.loads(result.stdout) if parse else None
+
+
+def persist(path, value):
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as output:
+        temporary = Path(output.name)
+        try:
+            json.dump(value, output)
+            output.flush()
+            os.fsync(output.fileno())
+            os.replace(temporary, path)
+            directory = os.open(path.parent, os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--state-dir", type=Path, default=Path("/var/lib/nexigon/rugix-apps")
+    )
+    parser.add_argument("--max-attempts", type=int, default=3)
+    parser.add_argument("--retry", action="store_true")
+    args = parser.parse_args()
+    if args.max_attempts < 1:
+        parser.error("--max-attempts must be positive")
+    try:
+        reconcile(args.state_dir, args.max_attempts, args.retry)
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
