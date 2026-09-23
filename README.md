@@ -51,6 +51,25 @@ System updates use the same optional-hash behavior:
 use_bundle_hash = "true"
 ```
 
+## Declarative App Configuration
+
+The `nexigon-rugix-apps` integration includes a timer that reconciles the protected
+`dev.nexigon.apps.config` property with installed Rugix apps. Device profiles can
+supply this property to several devices. Each app declaration specifies a package
+version ID, an optional asset filename, and a `running` or `stopped` state.
+
+An empty `apps` map removes only apps previously managed by the handler. Removing
+the property suspends management and keeps installed apps. Status is reported in
+`dev.nexigon.apps.status`, including the configuration version. Failed changes have
+a per-app retry limit; the `nexigon.rugix-apps.reconcile` device command retries them.
+The ledger at `/var/lib/nexigon/rugix-apps` persists across Rugix system updates.
+The `use_bundle_hash` recipe setting applies to timer runs and explicit retries.
+
+Use trusted bundles containing only the declared app. The handler uses Rugix's
+bundle verification and does not filter bundle payloads. See the
+[declarative app configuration guide](https://docs.nexigon.dev/agent/next/rugix/app-profiles)
+for the configuration contract and retry behavior.
+
 ## Licensing
 
 This project is licensed under either [MIT](https://github.com/nexigon/nexigon-rugix/blob/main/LICENSE-MIT) or [Apache 2.0](https://github.com/nexigon/nexigon-rugix/blob/main/LICENSE-APACHE) at your opinion.

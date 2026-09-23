@@ -1,0 +1,8 @@
+[command]
+name = "nexigon.rugix-apps.reconcile"
+description = "Retry the desired Rugix Apps configuration"
+category = "applications"
+
+[exec]
+handler = ["/usr/libexec/nexigon/nexigon-rugix-apps-reconcile", "--retry"]
+timeout = 3600
