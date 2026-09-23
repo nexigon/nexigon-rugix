@@ -3,7 +3,8 @@
 
 The public configuration, status, and durable ledger contracts live in Nexigon's
 apps.sidex. A missing configuration suspends management. Empty apps removes
-previously managed apps. Failed work is bounded per configuration version.
+previously managed apps. Consecutive failed changes are bounded per app until
+its configuration version changes or an operator retries.
 """
 
 import argparse
@@ -15,6 +16,9 @@ import re
 import subprocess
 import sys
 import tempfile
+
+# Bakery sets this default for both the timer and explicit retry commands.
+DEFAULT_USE_BUNDLE_HASH = "false"
 
 
 def reconcile(state_dir, max_attempts, retry):
@@ -36,6 +40,7 @@ def reconcile(state_dir, max_attempts, retry):
             else {"configVersion": version, "managed": {}}
         )
         results = {}
+        configuration_error = None
         try:
             desired = validate_config(response["value"])
             if ledger["configVersion"] != version or retry:
@@ -59,7 +64,7 @@ def reconcile(state_dir, max_attempts, retry):
                 results[name] = apply_app(
                     name, target, entry, ledger, path, max_attempts
                 )
-            # Install failures do not remove the old fleet's remaining workloads.
+            # Keep existing workloads until every requested app has converged.
             if all(result["state"] == "converged" for result in results.values()):
                 for name in list(ledger["managed"]):
                     if name in desired:
@@ -82,17 +87,19 @@ def reconcile(state_dir, max_attempts, retry):
                     except (RuntimeError, ValueError) as error:
                         results[name] = {"state": "failed", "message": str(error)}
         except (ValueError, KeyError, TypeError) as error:
-            results["configuration"] = {"state": "failed", "message": str(error)}
+            configuration_error = str(error)
         states = {result["state"] for result in results.values()}
         status = {
             "configVersion": version,
             "apps": results,
             "state": "failed"
-            if "failed" in states
+            if configuration_error is not None or "failed" in states
             else "blocked"
             if "blocked" in states
             else "converged",
         }
+        if configuration_error is not None:
+            status["message"] = configuration_error
         command(
             [
                 "nexigon-agent",
@@ -171,7 +178,7 @@ def install(target):
     args = ["rugix-ctrl", "apps", "install"]
     bundle_hash = (asset.get("metadata") or {}).get("rugix", {}).get("bundleHash")
     if (
-        os.environ.get("NEXIGON_RUGIX_APPS_USE_BUNDLE_HASH", "false") == "true"
+        os.environ.get("NEXIGON_RUGIX_APPS_USE_BUNDLE_HASH", DEFAULT_USE_BUNDLE_HASH) == "true"
         and bundle_hash
     ):
         args += ["--bundle-hash", bundle_hash]

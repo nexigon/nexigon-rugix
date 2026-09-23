@@ -5,6 +5,5 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-Environment=NEXIGON_RUGIX_APPS_USE_BUNDLE_HASH=@@USE_BUNDLE_HASH@@
 StateDirectory=nexigon/rugix-apps
 ExecStart=/usr/libexec/nexigon/nexigon-rugix-apps-reconcile

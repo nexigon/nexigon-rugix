@@ -60,9 +60,10 @@ version ID, an optional asset filename, and a `running` or `stopped` state.
 
 An empty `apps` map removes only apps previously managed by the handler. Removing
 the property suspends management and keeps installed apps. Status is reported in
-`dev.nexigon.apps.status`, including the configuration version. Failures have a
-bounded retry count; the `nexigon.rugix-apps.reconcile` device command retries them.
+`dev.nexigon.apps.status`, including the configuration version. Failed changes have
+a per-app retry limit; the `nexigon.rugix-apps.reconcile` device command retries them.
 The ledger at `/var/lib/nexigon/rugix-apps` persists across Rugix system updates.
+The `use_bundle_hash` recipe setting applies to timer runs and explicit retries.
 
 Use trusted bundles containing only the declared app. The handler uses Rugix's
 bundle verification and does not filter bundle payloads. See the

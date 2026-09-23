@@ -18,7 +18,9 @@ sed -i \
     /usr/libexec/nexigon/nexigon-rugix-apps-deploy
 
 install -D -m 644 "${RECIPE_DIR}"/systemd/* -t /lib/systemd/system
-sed -i "s|@@USE_BUNDLE_HASH@@|${RECIPE_PARAM_USE_BUNDLE_HASH}|g" /lib/systemd/system/nexigon-rugix-apps-reconcile.service
+sed -i \
+    "s|^DEFAULT_USE_BUNDLE_HASH = \"false\"$|DEFAULT_USE_BUNDLE_HASH = \"${RECIPE_PARAM_USE_BUNDLE_HASH}\"|" \
+    /usr/libexec/nexigon/nexigon-rugix-apps-reconcile
 mkdir -p /etc/rugix/state
 cat >/etc/rugix/state/nexigon-rugix-apps.toml <<EOF
 [[persist]]
