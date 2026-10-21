@@ -13,7 +13,7 @@ Please be aware that this may break your builds if we introduce backwards-incomp
 
 ## Agent Compatibility
 
-This recipe line defaults to Nexigon Agent `v0.6.0`. Agent 0.6 requires TCP
+This recipe line defaults to Nexigon Agent `v0.6.1`. Agent 0.6 requires TCP
 forwarding destinations to be declared by an HTTP export or an explicit
 `[forwarding]` policy.
 
