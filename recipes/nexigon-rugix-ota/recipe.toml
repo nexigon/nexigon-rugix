@@ -1,7 +1,10 @@
-description = "Nexigon Rugix OTA update service"
+description = "Nexigon system updates with Rugix"
 dependencies = ["nexigon-rugix-watchdog"]
+# Run after `nexigon-agent-config`, which writes the agent configuration.
+priority = -1000
 
 [parameters]
 interval = { default = "4h" }
+jitter = { default = "5min" }
 tag = { default = "stable" }
 use_bundle_hash = { default = "false" }
