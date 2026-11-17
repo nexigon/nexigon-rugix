@@ -4,12 +4,15 @@ To make the recipes and layers available, include the following in your `rugix-b
 
 ```toml
 [repositories]
-nexigon = { git = "https://github.com/nexigon/nexigon-rugix.git", branch = "v0.3" }
+nexigon = { git = "https://github.com/nexigon/nexigon-rugix.git", branch = "v0.4" }
 ```
 
 We follow [Cargo's flavor of semantic versioning](https://doc.rust-lang.org/cargo/reference/resolver.html#semver-compatibility).
 You can also use the most recent development version by omitting the `branch` property.
 Please be aware that this may break your builds if we introduce backwards-incompatible changes.
+
+The `v0.4` recipes install Nexigon Agent 0.7, which updates the system and the
+apps of a device itself. For Nexigon Agent 0.6, use `v0.3`.
 
 ## Provisioning Images
 
@@ -25,31 +28,60 @@ In this mode, the recipe does not read `.env` and does not bake a deployment
 token into the image. The agent starts its local provisioning endpoint and
 stores redeemed credentials under `/var/lib/nexigon/agent`.
 
-The OTA recipe can also be installed without a repository path. It remains
-idle until the `dev.nexigon.ota.config` device property supplies a `path`,
-which is useful for images that are paired after they have been flashed.
-Before pairing, the OTA check exits cleanly without leaving its systemd
-oneshot service in a failed state.
+## System Updates and Apps
 
-## Bundle Hash Verification
-
-The `nexigon-rugix-apps` deployment command can use a bundle hash from
-`metadata.rugix.bundleHash`. When enabled and the selected `.rugixb` asset has
-this metadata, the command passes the hash to Rugix Ctrl. When the metadata is
-absent, Rugix Ctrl performs its normal signature verification instead. Enable
-metadata hashes with:
+Nexigon Agent installs system updates with Rugix Ctrl and manages Rugix Apps
+once its configuration enables the integrations. Add the watchdog, which rolls
+back a new system that the agent does not commit, and enable the integrations
+in the `extra_config` parameter:
 
 ```toml
-[parameters."nexigon/nexigon-rugix-apps"]
-use_bundle_hash = "true"
+recipes = [
+    # ...
+    "nexigon/nexigon-agent",
+    "nexigon/nexigon-agent-config",
+    "nexigon/nexigon-rugix-watchdog",
+]
+
+[parameters."nexigon/nexigon-agent-config"]
+extra_config = """
+[integrations.rugix.system-updates]
+enabled = true
+path = "my-repo/gateway-os/stable"
+
+[integrations.rugix.apps]
+enabled = true
+"""
 ```
 
-System updates use the same optional-hash behavior:
+Without `path`, a device does not update until the `dev.nexigon.ota.config`
+device property supplies one, which suits images that are paired after they
+have been flashed. With `use-bundle-hash = true`, either integration verifies
+bundles with the hash from the `metadata.rugix.bundleHash` metadata of an
+asset, if present, instead of the bundle signature.
 
-```toml
-[parameters."nexigon/nexigon-rugix-ota"]
-use_bundle_hash = "true"
-```
+[System Updates](https://docs.nexigon.dev/agent/next/concepts/system-updates)
+and [Rugix Apps](https://docs.nexigon.dev/agent/next/concepts/rugix-apps)
+describe the integrations and their settings.
+
+## Upgrading from v0.3
+
+The `nexigon-rugix-ota` and `nexigon-rugix-apps` recipes are gone. Nexigon Agent
+0.7 provides their functionality, including the commands that check for
+updates and start, stop, roll back, and remove apps. To upgrade:
+
+1. Switch the `branch` of the repository to `v0.4`.
+2. Remove `nexigon/nexigon-rugix-ota` and `nexigon/nexigon-rugix-apps` from
+   your layers and keep `nexigon/nexigon-rugix-watchdog`.
+3. Enable the integrations as shown above. Set `path` to
+   `<repository>/<package>/<tag>` with the `NEXIGON_REPOSITORY` and
+   `NEXIGON_PACKAGE` that the update recipe read from `.env` and its `tag`
+   parameter. The `interval` parameter becomes `check-interval-secs`, and
+   `use_bundle_hash` becomes `use-bundle-hash`.
+
+Devices keep their update and app configuration and status. The
+[upgrade guide](https://docs.nexigon.dev/agent/next/upgrading) describes how
+to roll out the first image built this way.
 
 ## Licensing
 
