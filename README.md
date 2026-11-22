@@ -14,6 +14,12 @@ Please be aware that this may break your builds if we introduce backwards-incomp
 The `v0.4` recipes install Nexigon Agent 0.7, which updates the system and the
 apps of a device itself. For Nexigon Agent 0.6, use `v0.3`.
 
+## Agent Compatibility
+
+This recipe line defaults to Nexigon Agent `v0.7.0`. Override the `version`
+parameter of `nexigon-agent` or `nexigon-agent-rpi` to select another Agent
+release.
+
 ## Provisioning Images
 
 The `nexigon-agent-config` recipe can build tokenless images for pairing-key
