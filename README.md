@@ -60,8 +60,8 @@ have been flashed. With `use-bundle-hash = true`, either integration verifies
 bundles with the hash from the `metadata.rugix.bundleHash` metadata of an
 asset, if present, instead of the bundle signature.
 
-[System Updates](https://docs.nexigon.dev/agent/next/concepts/system-updates)
-and [Rugix Apps](https://docs.nexigon.dev/agent/next/concepts/rugix-apps)
+[System Updates](https://docs.nexigon.dev/agent/concepts/system-updates)
+and [Rugix Apps](https://docs.nexigon.dev/agent/concepts/rugix-apps)
 describe the integrations and their settings.
 
 ## Upgrading from v0.3
@@ -80,7 +80,7 @@ updates and start, stop, roll back, and remove apps. To upgrade:
    `use_bundle_hash` becomes `use-bundle-hash`.
 
 Devices keep their update and app configuration and status. The
-[upgrade guide](https://docs.nexigon.dev/agent/next/upgrading) describes how
+[upgrade guide](https://docs.nexigon.dev/agent/upgrading) describes how
 to roll out the first image built this way.
 
 ## Licensing
