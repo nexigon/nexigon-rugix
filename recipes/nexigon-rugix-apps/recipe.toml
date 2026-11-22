@@ -1,4 +1,0 @@
-description = "Rugix Apps lifecycle management commands"
-
-[parameters]
-use_bundle_hash = { default = "false" }
